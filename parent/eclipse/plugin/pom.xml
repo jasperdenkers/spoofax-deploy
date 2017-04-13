@@ -92,6 +92,11 @@
       <artifactId>org.metaborg.spoofax.nativebundle</artifactId>
       <version>${metaborg-version}</version>
     </dependency>
+    <dependency>
+      <groupId>org.metaborg</groupId>
+      <artifactId>meta.flowspec.java</artifactId>
+      <version>${metaborg-version}</version>
+    </dependency>
     <!-- Parser -->
     <dependency>
       <groupId>org.metaborg</groupId>
