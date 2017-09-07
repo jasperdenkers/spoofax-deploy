@@ -8,7 +8,7 @@ from plumbum import cli
 
 from metaborg.releng.bootstrap import Bootstrap
 from metaborg.releng.build import RelengBuilder
-from metaborg.releng.deploy import MetaborgBintrayDeployer, MetaborgMavenDeployer
+from metaborg.releng.deploy import MetaborgBintrayDeployer, MetaborgMavenDeployer, MetaborgNexusDeployer
 from metaborg.releng.eclipse import MetaborgEclipseGenerator
 from metaborg.releng.icon import GenerateIcons
 from metaborg.releng.maven import MetaborgMavenSettingsGeneratorGenerator
@@ -16,7 +16,7 @@ from metaborg.releng.release import MetaborgRelease
 from metaborg.releng.versions import SetVersions
 from metaborg.util.git import (CheckoutAll, CleanAll, MergeAll, PushAll,
   RemoteType, ResetAll, SetRemoteAll, TagAll,
-  TrackAll, UpdateAll, create_now_qualifier, create_qualifier, repo_changed)
+  TrackAll, UpdateAll, create_now_qualifier, create_qualifier, repo_changed, FetchAll)
 from metaborg.util.path import CommonPrefix
 from metaborg.util.prompt import YesNo, YesNoTrice, YesNoTwice
 
@@ -151,6 +151,7 @@ class MetaborgRelengCleanUpdate(cli.Application):
         return 1
     print('Resetting, cleaning, and updating all submodules')
     repo = self.parent.repo
+    FetchAll(repo)
     CheckoutAll(repo)
     ResetAll(repo, toRemote=True)
     CheckoutAll(repo)
@@ -330,7 +331,7 @@ class MetaborgRelengSetVersions(cli.Application):
         print('WARNING: This will CHANGE pom.xml, MANIFEST.MF, and feature.xml files, do you want to continue?')
         if not YesNo():
           return 1
-    SetVersions(self.parent.repo, self.fromVersion, self.toVersion, True, self.dryRun, self.commit)
+    SetVersions(self.parent.repo, self.fromVersion, self.toVersion, self.dryRun, self.commit)
     return 0
 
 
@@ -446,9 +447,39 @@ class MetaborgBuildShared(cli.Application):
     group='Gradle'
   )
 
+  nexusDeploy = cli.Flag(
+    names=['--nexus-deploy'], default=False,
+    help='Enable deploying to a Nexus repository',
+    group='Nexus'
+  )
+  nexusUrl = cli.SwitchAttr(
+    names=['--nexus-url'], argtype=str, default='http://artifacts.metaborg.org',
+    requires=['--nexus-deploy'],
+    help='URL of the Nexus repository server',
+    group='Nexus'
+  )
+  nexusRepository = cli.SwitchAttr(
+    names=['--nexus-repo'], argtype=str, default='releases',
+    requires=['--nexus-deploy'],
+    help='Repository to use for deploying to Nexus',
+    group='Nexus'
+  )
+  nexusUsername = cli.SwitchAttr(
+    names=['--nexus-username'], argtype=str, default=None,
+    requires=['--nexus-deploy'],
+    help='Nexus username to use for deploying. When not set, defaults to the NEXUS_USERNAME environment variable',
+    group='Nexus'
+  )
+  nexusPassword = cli.SwitchAttr(
+    names=['--nexus-password'], argtype=str, default=None,
+    requires=['--nexus-deploy'],
+    help='Nexus password to use for deploying. When not set, defaults to the NEXUS_PASSWORD environment variable',
+    group='Nexus'
+  )
+
   bintrayDeploy = cli.Flag(
-    names=['-D', '--bintray-deploy'], default=False,
-    help='Enable deploying to bintray',
+    names=['--bintray-deploy'], default=False,
+    help='Enable deploying to Bintray',
     group='Bintray'
   )
   bintrayOrganization = cli.SwitchAttr(
@@ -479,7 +510,7 @@ class MetaborgBuildShared(cli.Application):
   def make_builder(self, repo, buildProps, buildDeps=True, versionOverride=None):
     builder = RelengBuilder(repo, buildDeps=buildDeps)
 
-    version = buildProps.get('version', versionOverride or self.buildVersion)
+    version = versionOverride or buildProps.get('version', self.buildVersion)
     if version:
       versionIsSnapshot = 'SNAPSHOT' in version
     else:
@@ -515,6 +546,25 @@ class MetaborgBuildShared(cli.Application):
 
     builder.gradleNative = buildProps.get_bool('gradle.native', not self.gradleNoNative)
     builder.gradleDaemon = buildProps.get_bool('gradle.daemon', not self.gradleNoDaemon)
+
+    if buildProps.get_bool('nexus.deploy.enable', self.nexusDeploy):
+      nexusUrl = buildProps.get('nexus.deploy.url', self.nexusUrl)
+      if not nexusUrl:
+        raise Exception('Cannot deploy to Nexus: URL was not set')
+      nexusRepository = buildProps.get('nexus.deploy.repository', self.nexusRepository)
+      if not nexusRepository:
+        raise Exception('Cannot deploy to Nexus: repository was not set')
+      if not version:
+        raise Exception('Cannot deploy to Nexus: version was not set')
+      nexusUsername = self.nexusUsername or os.environ.get('NEXUS_USERNAME')
+      if not nexusUsername:
+        raise Exception('Cannot deploy to Nexus: username was not set')
+      nexusPassword = self.nexusPassword or os.environ.get('NEXUS_PASSWORD')
+      if not nexusPassword:
+        raise Exception('Cannot deploy to Nexus: password was not set')
+      builder.nexusDeployer = MetaborgNexusDeployer(nexusUrl, nexusRepository, version, nexusUsername, nexusPassword)
+    else:
+      builder.nexusDeployer = None
 
     if buildProps.get_bool('bintray.deploy.enable', self.bintrayDeploy):
       bintrayOrganization = buildProps.get('bintray.deploy.organization', self.bintrayOrganization)
@@ -648,6 +698,16 @@ class MetaborgRelengRelease(MetaborgBuildShared):
     help='Reverts the release process, undoing any changes to the release and development branches',
     group='Release'
   )
+  dryRun = cli.Flag(
+    names=['--dry-run'], default=False,
+    help='Perform a dry run, skipping steps that push commits',
+    group='Release'
+  )
+  noEclipseInstances = cli.Flag(
+    names=['--no-eclipse-instances'], default=False,
+    help='Skip creating Eclipse instances',
+    group='Release'
+  )
 
   def main(self, releaseBranch, nextReleaseVersion, developBranch, curDevelopVersion):
     """
@@ -676,6 +736,8 @@ class MetaborgRelengRelease(MetaborgBuildShared):
 
     release.nextDevelopVersion = self.nextDevelopVersion
     release.interactive = not self.nonInteractive
+    release.dryRun = self.dryRun
+    release.createEclipseInstances = not self.noEclipseInstances
 
     if self.revertRelease:
       print(
@@ -694,9 +756,6 @@ class MetaborgRelengRelease(MetaborgBuildShared):
       return 0
     if builder.mavenDeployer.snapshot:
       print('Cannot release Maven snapshots')
-      return 0
-    if not builder.bintrayDeployer:
-      print('No Bintray deployment arguments were set')
       return 0
 
     print('Performing release')

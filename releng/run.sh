@@ -14,9 +14,14 @@ else
   exit 1
 fi
 
+# Ensure that pip is installed and updated
+$PYTHON_CMD -m ensurepip --upgrade --user > /dev/null
+
+# Ensure that virtualenv is installed and updated
+$PYTHON_CMD -m pip install --quiet --user --upgrade virtualenv
+
 # Create and activate virtualenv
 VENV="$DIR/.virtualenv"
-$PYTHON_CMD -m pip install --quiet --user --upgrade virtualenv
 $PYTHON_CMD -m virtualenv --quiet "$VENV" > /dev/null
 # Since virtualenv is made by idiots, temporarily disable unbound variable checks when activating virtualenv
 set +o nounset

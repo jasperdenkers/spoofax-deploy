@@ -1,76 +1,9 @@
+from eclipsegen.preset import Presets
+
 from eclipsegen.generate import EclipseGenerator, EclipseMultiGenerator
 
 
 class MetaborgEclipseGenerator(object):
-  # Eclipse
-  eclipseRepos = [
-    # Eclipse Neon (4.6)
-    'http://eclipse.mirror.triple-it.nl/releases/neon/',
-    'http://eclipse.mirror.triple-it.nl/eclipse/updates/4.6',
-    # Gradle buildship 2.0 milestones
-    'http://download.eclipse.org/buildship/updates/e45/milestones/2.x/',
-  ]
-  eclipseIUs = [
-    # Platform
-    'org.eclipse.platform.ide',
-    'org.eclipse.platform.feature.group',
-    # Common
-    'org.eclipse.epp.package.common.feature.feature.group',
-    # P2 update UI
-    'org.eclipse.equinox.p2.user.ui.feature.group',
-    # Marketplace
-    'org.eclipse.epp.mpc.feature.group',
-    # Package
-    'epp.package.java',
-    # Java development
-    'org.eclipse.jdt.feature.group',
-    # Maven
-    'org.eclipse.m2e.feature.feature.group',
-    # Gradle
-    'org.eclipse.buildship.feature.group',
-    # XML editors
-    'org.eclipse.wst.xml_ui.feature.feature.group',
-    # Code recommenders
-    'org.eclipse.recommenders.rcp.feature.feature.group',
-    # Git
-    'org.eclipse.egit.feature.group',
-    'org.eclipse.jgit.feature.group'
-  ]
-  eclipseLangDevIUs = [
-    # Eclipse plugin development
-    'org.eclipse.pde.feature.group'
-  ]
-  eclipseLwbDevIUs = [
-    # Eclipse platform sources
-    'org.eclipse.platform.source.feature.group',
-    # Eclipse plugin development sources
-    'org.eclipse.pde.source.feature.group',
-    # Java development plugin sources
-    'org.eclipse.jdt.source.feature.group'
-  ]
-
-  # M2E plugins
-  m2ePluginRepos = [
-    'http://download.jboss.org/jbosstools/updates/m2e-extensions/m2e-jdt-compiler/',
-    'http://download.jboss.org/jbosstools/updates/m2e-extensions/m2e-apt',
-    'http://repo1.maven.org/maven2/.m2e/connectors/m2eclipse-buildhelper/0.15.0/N/0.15.0.201405280027/',
-    'http://repo1.maven.org/maven2/.m2e/connectors/m2eclipse-tycho/0.7.0/N/LATEST/'
-  ]
-  m2ePluginIUs = [
-    # Eclipse JDT compiler support
-    'org.jboss.tools.m2e.jdt.feature.feature.group',
-    # Java annotation processing support
-    'org.jboss.tools.maven.apt.feature.feature.group',
-    # Build helper plugin support
-    'org.sonatype.m2e.buildhelper.feature.feature.group'
-  ]
-  m2ePluginLangDevIUs = [
-    # Tycho support
-    'org.sonatype.tycho.m2e.feature.feature.group'
-  ]
-  m2ePluginLwbDevIUs = [
-  ]
-
   spoofaxRepo = 'http://download.spoofax.org/update/nightly/'
   spoofaxRepoLocal = 'spoofax-eclipse/org.metaborg.spoofax.eclipse.updatesite/target/site'
   spoofaxIUs = ['org.metaborg.spoofax.eclipse.feature.feature.group']
@@ -94,34 +27,18 @@ class MetaborgEclipseGenerator(object):
     if not moreIUs:
       moreIUs = []
 
-    repos = []
-    ius = []
+    presets = [Presets.platform.value, Presets.java.value, Presets.xml.value, Presets.git.value, Presets.maven.value, Presets.gradle.value]
+    if langDev or lwbDev:
+      presets.extend([Presets.plugin.value, Presets.plugin_maven.value])
+    repos, ius = Presets.combine_presets(presets)
 
-    # Eclipse
-    repos.extend(MetaborgEclipseGenerator.eclipseRepos)
-    ius.extend(MetaborgEclipseGenerator.eclipseIUs)
-    if langDev:
-      ius.extend(MetaborgEclipseGenerator.eclipseLangDevIUs)
-    if lwbDev:
-      ius.extend(MetaborgEclipseGenerator.eclipseLwbDevIUs)
+    repos.add(spoofaxRepo)
+    ius.update(MetaborgEclipseGenerator.spoofaxIUs)
+    if langDev or lwbDev:
+      ius.update(MetaborgEclipseGenerator.spoofaxLangDevIUs)
 
-    # M2E plugins
-    repos.extend(MetaborgEclipseGenerator.m2ePluginRepos)
-    ius.extend(MetaborgEclipseGenerator.m2ePluginIUs)
-    if langDev:
-      ius.extend(MetaborgEclipseGenerator.m2ePluginLangDevIUs)
-    if lwbDev:
-      ius.extend(MetaborgEclipseGenerator.m2ePluginLwbDevIUs)
-
-    # Spoofax
-    if spoofax:
-      repos.append(spoofaxRepo)
-      ius.extend(MetaborgEclipseGenerator.spoofaxIUs)
-      if langDev:
-        ius.extend(MetaborgEclipseGenerator.spoofaxLangDevIUs)
-
-    repos.extend(moreRepos)
-    ius.extend(moreIUs)
+    repos.update(moreRepos)
+    ius.update(moreIUs)
 
     self.workingDir = workingDir
     self.destination = destination

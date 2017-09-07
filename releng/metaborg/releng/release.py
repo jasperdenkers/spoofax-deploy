@@ -19,7 +19,9 @@ class MetaborgRelease(object):
     self.builder = builder
 
     self.nextDevelopVersion = None
+    self.createEclipseInstances = True
 
+    self.dryRun = False
     self.interactive = True
 
   def release(self):
@@ -97,15 +99,14 @@ class MetaborgRelease(object):
           if not self.interactive:
             raise Exception('Error while in non-interactive mode, stopping')
 
-        # Fix .gitmodules file to point to the correct branches
-        print('Restoring .gitmodules file')
-        submoduleRelBranches = db['submoduleRelBranches']
+        # Restore changes that should not be merged
+        print('Restoring changes that should not be merged')
         try:
-          for key, value in submoduleRelBranches.items():
-            self.repo.git.config('-f', '.gitmodules', '--replace-all', 'submodule.{}.branch'.format(key), value)
-          self.repo.git.add('.gitmodules')
+          self.repo.git.checkout(self.releaseBranchName, '--', '.gitmodules')
+          self.repo.git.checkout(self.releaseBranchName, '--', 'build.properties')
+          self.repo.git.checkout(self.releaseBranchName, '--', 'jenkins.properties')
         except git.exc.GitCommandError as detail:
-          print('ERROR: restoring .gitmodules config failed')
+          print('ERROR: restoring changes that should not be merged failed')
           print(str(detail))
           if not self.interactive:
             raise Exception('Error while in non-interactive mode, stopping')
@@ -188,8 +189,7 @@ class MetaborgRelease(object):
 
         print('Setting versions')
         try:
-          SetVersions(self.repo, self.curDevelopVersion, self.nextReleaseVersion, setEclipseVersions=True, dryRun=False,
-            commit=True)
+          SetVersions(self.repo, self.curDevelopVersion, self.nextReleaseVersion, dryRun=False, commit=True)
         except Exception as detail:
           print('ERROR: Setting versions failed')
           print(str(detail))
@@ -218,9 +218,10 @@ class MetaborgRelease(object):
         builder = self.builder
         builder.buildStratego = True
         try:
-          # TODO: build all
-          # builder.build('all', 'eclipse-instances')
-          builder.build('all')
+          if self.createEclipseInstances:
+            builder.build('all', 'eclipse-instances')
+          else:
+            builder.build('all')
         except Exception as detail:
           print('ERROR: build and deploy failed')
           print(str(detail))
@@ -257,15 +258,16 @@ class MetaborgRelease(object):
       def Step8():
         print('Step 8: push release submodules and repository')
 
-        print('Pushing changes')
         try:
-          pass
-          # TODO: enable again
-          # PushAll(self.repo)
-          # PushAll(self.repo, tags=True)
-          # remote = self.repo.remote('origin')
-          # remote.push()
-          # remote.push(tags=True)
+          if not self.dryRun:
+            print('Pushing changes')
+            PushAll(self.repo)
+            PushAll(self.repo, tags=True)
+            remote = self.repo.remote('origin')
+            remote.push()
+            remote.push(tags=True)
+          else:
+            print('Performing dry run, not pushing')
         except git.exc.GitCommandError as detail:
           print('ERROR: pushing changes failed')
           print(str(detail))
@@ -298,8 +300,7 @@ class MetaborgRelease(object):
             'Step 10: for each submodule: set version from the current development version to the next development version')
 
           print('Setting versions')
-          SetVersions(self.repo, self.curDevelopVersion, self.nextDevelopVersion, setEclipseVersions=True, dryRun=False,
-            commit=True)
+          SetVersions(self.repo, self.curDevelopVersion, self.nextDevelopVersion, dryRun=False, commit=True)
 
           print('Updating submodule revisions')
           try:
@@ -324,13 +325,14 @@ class MetaborgRelease(object):
       def Step11():
         print('Step 11: push development submodules and repository')
 
-        print('Pushing changes')
         try:
-          pass
-          # TODO: enable again
-          # PushAll(self.repo)
-          # remote = self.repo.remote('origin')
-          # remote.push()
+          if not self.dryRun:
+            print('Pushing changes')
+            PushAll(self.repo)
+            remote = self.repo.remote('origin')
+            remote.push()
+          else:
+            print('Performing dry run, not pushing')
         except git.exc.GitCommandError as detail:
           print('ERROR: pushing changes failed')
           print(str(detail))

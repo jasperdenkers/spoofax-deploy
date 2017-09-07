@@ -9,7 +9,7 @@ from gradlepy.run import Gradle
 from mavenpy.run import Maven
 from pyfiglet import Figlet
 
-from metaborg.releng.deploy import MetaborgFileArtifact
+from metaborg.releng.deploy import MetaborgFileArtifact, BintrayMetadata, NexusMetadata
 from metaborg.releng.eclipse import MetaborgEclipseGenerator
 from metaborg.util.git import create_qualifier
 
@@ -45,6 +45,7 @@ class RelengBuilder(object):
     self.gradleNative = False
     self.gradleDaemon = None
 
+    self.nexusDeployer = None
     self.bintrayDeployer = None
 
     builder = Builder(copyOptions=True, dependencyAnalysis=buildDeps)
@@ -75,9 +76,8 @@ class RelengBuilder(object):
     eclipsePrereqs = add_main_target('eclipse-prereqs', allLangDeps + [], RelengBuilder.__build_eclipse_prereqs)
     eclipse = add_main_target('eclipse', allLangDeps + [eclipsePrereqs], RelengBuilder.__build_eclipse)
 
-    intellijPrereqs = add_main_target('intellij-prereqs', allLangDeps + [], RelengBuilder.__build_intellij_prereqs)
-    intellijJps = add_main_target('intellij-jps', allLangDeps + [intellijPrereqs], RelengBuilder.__build_intellij_jps)
-    add_main_target('intellij', allLangDeps + [intellijJps], RelengBuilder.__build_intellij)
+    intellij = add_main_target('intellij', allLangDeps, RelengBuilder.__build_intellij)
+    spt_intellij = add_main_target('spt-intellij', [spt], RelengBuilder.__build_spt_intellij)
 
     builder.add_target('all', mainTargets)
 
@@ -140,9 +140,9 @@ class RelengBuilder(object):
     gradle.noNative = not self.gradleNative
     gradle.daemon = self.gradleDaemon
 
-    if self.mavenCleanLocalRepo:
+    # TODO: clean standard local repo (~/.m2/repository) when self.mavenLocalRepo is None
+    if self.mavenCleanLocalRepo and self.mavenLocalRepo:
       print(figlet.renderText('Cleaning local maven repository'))
-      # TODO: self.mavenLocalRepo can be None
       _clean_local_repo(self.mavenLocalRepo)
 
     print(figlet.renderText('Building'))
@@ -169,8 +169,13 @@ class RelengBuilder(object):
       print(figlet.renderText('Deploying Maven artifacts'))
       self.mavenDeployer.maven_remote_deploy()
 
+    if self.nexusDeployer:
+      print(figlet.renderText('Deploying artifacts to Nexus'))
+      for artifact in result.artifacts:
+        self.nexusDeployer.artifact_remote_deploy(artifact)
+
     if self.bintrayDeployer:
-      print(figlet.renderText('Deploying other artifacts'))
+      print(figlet.renderText('Deploying artifacts to Bintray'))
       for artifact in result.artifacts:
         self.bintrayDeployer.artifact_remote_deploy(artifact)
 
@@ -250,12 +255,16 @@ class RelengBuilder(object):
       distribDir = os.path.join(strategoXtDir, 'buildpoms', 'build', 'target')
 
     return StepResult([
-      MetaborgFileArtifact('StrategoXT distribution', 'strategoxt-distrib',
+      FileArtifact(
+        'StrategoXT distribution',
         _glob_one('{}/strategoxt-distrib-*-bin.tar'.format(distribDir)),
-        os.path.join('strategoxt', 'distrib.tar')),
-      MetaborgFileArtifact('StrategoXT JAR', 'strategoxt-jar',
+        os.path.join('strategoxt', 'distrib.tar')
+      ),
+      FileArtifact(
+        'StrategoXT JAR',
         '{}/dist/share/strategoxt/strategoxt/strategoxt.jar'.format(distribDir),
-        os.path.join('strategoxt', 'strategoxt.jar')),
+        os.path.join('strategoxt', 'strategoxt.jar')
+      ),
     ])
 
   @staticmethod
@@ -334,9 +343,10 @@ class RelengBuilder(object):
     maven.run_in_dir(cwd, target, forceContextQualifier=eclipseQualifier)
 
   @staticmethod
-  def __build_eclipse(basedir, eclipseQualifier, maven, **_):
+  def __build_eclipse(basedir, eclipseQualifier, maven, mavenDeployer, **_):
+    target = 'deploy' if mavenDeployer else 'install'
     cwd = os.path.join(basedir, 'releng', 'build', 'eclipse')
-    maven.run_in_dir(cwd, 'install', forceContextQualifier=eclipseQualifier)
+    maven.run_in_dir(cwd, target, forceContextQualifier=eclipseQualifier)
     return StepResult([
       DirArtifact(
         'Spoofax Eclipse update site',
@@ -352,38 +362,51 @@ class RelengBuilder(object):
     generator = MetaborgEclipseGenerator(basedir, eclipsegenPath, spoofax=True, spoofaxRepoLocal=True,
       moreRepos=eclipseGenMoreRepos, moreIUs=eclipseGenMoreIUs)
     archives = generator.generate_all(oss=Os.values(), archs=Arch.values(), fixIni=True, addJre=True,
-      archiveJreSeparately=True, archivePrefix='spoofax')
+      archiveJreSeparately=True, name='spoofax', archivePrefix='spoofax')
 
     artifacts = []
     for archive in archives:
       location = archive.location
       target = os.path.join('spoofax', 'eclipse', os.path.basename(location))
-      # TODO: switch back to MetaborgArtifact once we can upload larger files to Bintray.
-      artifacts.append(FileArtifact('Spoofax Eclipse instance', location, target))
+      packaging = 'zip' if archive.os.archiveFormat == 'zip' else 'tar.gz'
+      classifier = '{}-{}{}'.format(archive.os.name, archive.arch.name, '-jre' if archive.withJre else '')
+      artifacts.append(MetaborgFileArtifact(
+        'Spoofax Eclipse instance',
+        location,
+        target,
+        NexusMetadata('org.metaborg', 'org.metaborg.spoofax.eclipse.dist', packaging, classifier),
+      ))
     return StepResult(artifacts)
 
   @staticmethod
-  def __build_intellij_prereqs(basedir, gradle, **_):
-    target = 'publishToMavenLocal'  # TODO: Deploy
-    cwd = os.path.join(basedir, 'spoofax-intellij', 'org.metaborg.jps-deps')
-    gradle.run_in_dir(cwd, target)
-
-  @staticmethod
-  def __build_intellij_jps(basedir, gradle, **_):
-    target = 'install'  # TODO: Deploy
-    cwd = os.path.join(basedir, 'spoofax-intellij', 'org.metaborg.jps')
-    gradle.run_in_dir(cwd, target)
-
-  @staticmethod
   def __build_intellij(basedir, gradle, **_):
-    target = 'buildPlugin'  # TODO: Deploy
+    target = 'install'
     cwd = os.path.join(basedir, 'spoofax-intellij', 'org.metaborg.intellij')
     gradle.run_in_dir(cwd, target)
     return StepResult([
-      MetaborgFileArtifact('Spoofax for IntelliJ IDEA plugin', 'spoofax-intellij-updatesite',
+      MetaborgFileArtifact(
+        'Spoofax for IntelliJ IDEA plugin',
         _glob_one(os.path.join(basedir,
           'spoofax-intellij/org.metaborg.intellij/build/distributions/org.metaborg.intellij-*.zip')),
-        os.path.join('spoofax', 'intellij', 'plugin.zip')),
+        os.path.join('spoofax', 'intellij', 'plugin.zip'),
+        NexusMetadata('org.metaborg', 'org.metaborg.intellij.dist'),
+        BintrayMetadata('spoofax-intellij-updatesite')
+      ),
+    ])
+
+  @staticmethod
+  def __build_spt_intellij(basedir, gradle, **_):
+    target = 'install'
+    cwd = os.path.join(basedir, 'spt', 'org.metaborg.spt.testrunner.intellij')
+    gradle.run_in_dir(cwd, target)
+    return StepResult([
+      MetaborgFileArtifact(
+        'SPT test runner for IntelliJ',
+        _glob_one(os.path.join(basedir, cwd, 'build', 'distributions', 'org.metaborg.spt.testrunner.intellij-*.zip')),
+        os.path.join('spt', 'intellij', 'plugin.zip'),
+        NexusMetadata('org.metaborg', 'org.metaborg.spt.testrunner.intellij'),
+        BintrayMetadata('spt-intellij-updatesite')
+      ),
     ])
 
 
