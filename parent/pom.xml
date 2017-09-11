@@ -569,7 +569,7 @@
                     <versionRange>[3.6.1,)</versionRange>
                     <goals>
                       <goal>compile</goal>
-                      <goal>default-compile</goal>
+                      <goal>testCompile</goal>
                     </goals>
                   </pluginExecutionFilter>
                   <action>
